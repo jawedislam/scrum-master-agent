@@ -1,23 +1,13 @@
 # Scrum Master Agent - Auto Deploy Workflow
 # 
-# This workflow automatically deploys to your hosting when you push to main.
-# 
-# SETUP REQUIRED:
-# 1. Go to your repo Settings → Secrets → Actions
-# 2. Add these secrets:
-#    - FTP_HOST: Your Bluehost FTP hostname (e.g., ftp.yourdomain.com)
-#    - FTP_USER: Your FTP username
-#    - FTP_PASS: Your FTP password
-#    - JIRA_EMAIL: Your Atlassian email
-#    - JIRA_API_TOKEN: Your JIRA API token
-#    - CLAUDE_API_KEY: Your Anthropic API key (optional)
+# Deploys to the root folder of your hosting
 
 name: Deploy Scrum Master Agent
 
 on:
   push:
     branches: [main]
-  workflow_dispatch: # Allow manual trigger
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -39,45 +29,26 @@ jobs:
       - name: 🧪 Run tests
         run: npm test
 
-      - name: 📝 Create .env file for deployment
+      - name: 📁 Prepare deployment folder
         run: |
-          echo "JIRA_HOST=https://jawedislam85.atlassian.net" >> .env
-          echo "JIRA_EMAIL=${{ secrets.JIRA_EMAIL }}" >> .env
-          echo "JIRA_API_TOKEN=${{ secrets.JIRA_API_TOKEN }}" >> .env
-          echo "JIRA_PROJECT_KEY=SAT" >> .env
-          echo "CLAUDE_API_KEY=${{ secrets.CLAUDE_API_KEY }}" >> .env
-          echo "NODE_ENV=production" >> .env
+          mkdir -p deploy
+          cp public/index.html deploy/
+          cp api.php deploy/
 
-      # Option 1: FTP Deploy (for standard shared hosting like Bluehost)
       - name: 🚀 Deploy via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.4
         with:
           server: ${{ secrets.FTP_HOST }}
           username: ${{ secrets.FTP_USER }}
           password: ${{ secrets.FTP_PASS }}
-          local-dir: ./
-          server-dir: /public_html/scrum-agent/
+          local-dir: ./deploy/
+          server-dir: /
           exclude: |
             **/.git*
             **/.git*/**
             **/node_modules/**
-            .env.example
-            README.md
-
-      # Option 2: If you have SSH access (uncomment if preferred)
-      # - name: 🚀 Deploy via SSH
-      #   uses: appleboy/ssh-action@v1.0.0
-      #   with:
-      #     host: ${{ secrets.SSH_HOST }}
-      #     username: ${{ secrets.SSH_USER }}
-      #     key: ${{ secrets.SSH_KEY }}
-      #     script: |
-      #       cd /home/user/public_html/scrum-agent
-      #       git pull origin main
-      #       npm install --production
-      #       pm2 restart scrum-agent
 
       - name: ✅ Deployment complete
         run: |
           echo "🎉 Deployment successful!"
-          echo "Dashboard: https://yourdomain.com/scrum-agent/"
+          echo "Dashboard: https://scrum-master.intra-tech.co/"
