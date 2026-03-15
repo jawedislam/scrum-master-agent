@@ -58,11 +58,11 @@
     };
 
     // =========================================================================
-    // API FUNCTIONS
+    // API FUNCTIONS (PHP hosting version)
     // =========================================================================
     async function fetchSprintData() {
       try {
-        const response = await fetch(`${CONFIG.API_BASE}/api/sprint-data`);
+        const response = await fetch('api.php?endpoint=sprint-data');
         if (!response.ok) throw new Error('Failed to fetch sprint data');
         return await response.json();
       } catch (error) {
@@ -73,7 +73,7 @@
 
     async function analyzeWithAI(sprintData, prompt) {
       try {
-        const response = await fetch(`${CONFIG.API_BASE}/api/analyze`, {
+        const response = await fetch('api.php?endpoint=analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sprintData, prompt })
