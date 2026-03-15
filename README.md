@@ -97,3 +97,4 @@ Edit `src/jira-connector.js` to add more JIRA fields or connect additional servi
 ## License
 
 MIT
+
