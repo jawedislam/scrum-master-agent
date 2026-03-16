@@ -1,14 +1,7 @@
 <?php
 /**
  * Scrum Master Agent - PHP API
- * 
- * This is a fallback API for shared hosting that doesn't support Node.js.
- * Place this file in your public_html/scrum-agent/ folder.
- * 
- * SETUP:
- * 1. Rename this file to api.php
- * 2. Create a config.php file with your credentials (see below)
- * 3. Make sure your hosting has PHP 7.4+ with cURL enabled
+ * Updated to use new JIRA /search/jql endpoint
  */
 
 header('Content-Type: application/json');
@@ -23,14 +16,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 // Load configuration
-// Create a config.php file with:
-// <?php
-// define('JIRA_HOST', 'https://jawedislam85.atlassian.net');
-// define('JIRA_EMAIL', 'your-email@example.com');
-// define('JIRA_API_TOKEN', 'your-token');
-// define('JIRA_PROJECT_KEY', 'SAT');
-// define('CLAUDE_API_KEY', 'your-claude-key'); // optional
-
 if (file_exists('config.php')) {
     require_once 'config.php';
 } else {
@@ -44,7 +29,7 @@ $endpoint = $_GET['endpoint'] ?? 'health';
 /**
  * Make a request to JIRA API
  */
-function jiraRequest($path, $isAgile = false) {
+function jiraRequest($path, $isAgile = false, $method = 'GET', $postData = null) {
     $baseUrl = JIRA_HOST . ($isAgile ? '/rest/agile/1.0' : '/rest/api/3') . $path;
     
     $ch = curl_init();
@@ -56,15 +41,33 @@ function jiraRequest($path, $isAgile = false) {
         'Content-Type: application/json'
     ]);
     
+    if ($method === 'POST' && $postData) {
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($postData));
+    }
+    
     $response = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
     
     if ($httpCode !== 200) {
-        throw new Exception("JIRA API error: HTTP $httpCode");
+        throw new Exception("JIRA API error: HTTP $httpCode - " . $response);
     }
     
     return json_decode($response, true);
+}
+
+/**
+ * Search issues using new /search/jql endpoint (POST method)
+ */
+function searchIssues($jql, $fields = [], $maxResults = 100) {
+    $postData = [
+        'jql' => $jql,
+        'maxResults' => $maxResults,
+        'fields' => $fields
+    ];
+    
+    return jiraRequest('/search/jql', false, 'POST', $postData);
 }
 
 /**
@@ -125,9 +128,11 @@ try {
             break;
             
         case 'sprint-data':
-            // Fetch issues
+            // Fetch issues using new search/jql endpoint
             $jql = 'project = ' . JIRA_PROJECT_KEY . ' ORDER BY created DESC';
-            $issuesData = jiraRequest('/search?jql=' . urlencode($jql) . '&maxResults=100&fields=summary,status,priority,assignee,customfield_10016,description,labels,issuetype,created,updated');
+            $fields = ['summary', 'status', 'priority', 'assignee', 'customfield_10016', 'description', 'labels', 'issuetype', 'created', 'updated'];
+            
+            $issuesData = searchIssues($jql, $fields, 100);
             
             $issues = [];
             $team = [];
@@ -135,7 +140,7 @@ try {
             
             foreach ($issuesData['issues'] as $issue) {
                 $assignee = null;
-                if ($issue['fields']['assignee']) {
+                if (isset($issue['fields']['assignee']) && $issue['fields']['assignee']) {
                     $assignee = [
                         'id' => $issue['fields']['assignee']['accountId'],
                         'name' => $issue['fields']['assignee']['displayName'],
