@@ -3,12 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Scrum Master Agent</title>
+  <title>Scrum Master Agent v1.0</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+  <script src="https://unpkg.com/recharts@2.5.0/umd/Recharts.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
   <style>
     .loading-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
@@ -23,12 +24,9 @@
     const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } = Recharts;
 
     // =========================================================================
-    // CONFIGURATION - Update these for your setup
+    // CONFIGURATION
     // =========================================================================
     const CONFIG = {
-      // When running locally with server.js, use relative paths
-      // When running standalone, update with your server URL
-      API_BASE: '', // e.g., 'https://your-server.com' or '' for relative
       JIRA_HOST: 'https://jawedislam85.atlassian.net',
       PROJECT_KEY: 'SAT'
     };
@@ -90,16 +88,14 @@
     // COMPONENTS
     // =========================================================================
     const StatusBadge = ({ status }) => {
-      const styles = {
-        'Done': 'bg-emerald-100 text-emerald-800',
-        'In Progress': 'bg-blue-100 text-blue-800',
-        'Blocked': 'bg-red-100 text-red-800',
-        'To Do': 'bg-gray-100 text-gray-800',
+      const getStyle = (s) => {
+        const lower = s.toLowerCase();
+        if (lower.includes('done')) return 'bg-emerald-100 text-emerald-800';
+        if (lower.includes('progress')) return 'bg-blue-100 text-blue-800';
+        if (lower.includes('block')) return 'bg-red-100 text-red-800';
+        return 'bg-gray-100 text-gray-800';
       };
-      const normalizedStatus = Object.keys(styles).find(s => 
-        status.toLowerCase().includes(s.toLowerCase().replace(' ', ''))
-      ) || 'To Do';
-      return <span className={`px-2 py-1 rounded-full text-xs font-medium ${styles[normalizedStatus]}`}>{status}</span>;
+      return <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStyle(status)}`}>{status}</span>;
     };
 
     const MetricCard = ({ icon, title, value, subtitle, color = 'blue' }) => {
@@ -199,10 +195,10 @@
         setLoading(true);
         setError(null);
         const data = await fetchSprintData();
-        if (data) {
+        if (data && !data.error) {
           setSprintData(data);
         } else {
-          setError('Failed to load sprint data. Check your API configuration.');
+          setError(data?.error || 'Failed to load sprint data. Check your API configuration.');
         }
         setLoading(false);
       };
@@ -220,8 +216,8 @@
         if (!sprintData) return 50;
         const { metrics } = sprintData;
         let score = 100;
-        score -= metrics.byStatus.blocked * 15;
-        score -= (100 - metrics.completionRate) * 0.3;
+        score -= (metrics.byStatus.blocked || 0) * 15;
+        score -= (100 - (metrics.completionRate || 0)) * 0.3;
         if (sprintData.sprint.daysRemaining < 3 && metrics.completionRate < 70) score -= 20;
         return Math.max(0, Math.min(100, Math.round(score)));
       };
@@ -255,10 +251,10 @@
       }
 
       const pieData = sprintData ? [
-        { name: 'Done', value: sprintData.metrics.pointsByStatus.done },
-        { name: 'In Progress', value: sprintData.metrics.pointsByStatus.inProgress },
-        { name: 'Blocked', value: sprintData.metrics.pointsByStatus.blocked },
-        { name: 'To Do', value: sprintData.metrics.pointsByStatus.todo },
+        { name: 'Done', value: sprintData.metrics.pointsByStatus.done || 0 },
+        { name: 'In Progress', value: sprintData.metrics.pointsByStatus.inProgress || 0 },
+        { name: 'Blocked', value: sprintData.metrics.pointsByStatus.blocked || 0 },
+        { name: 'To Do', value: sprintData.metrics.pointsByStatus.todo || 0 },
       ] : [];
 
       return (
@@ -319,7 +315,7 @@
                     </span>
                   )}
                   <span className="text-xs text-gray-500">
-                    {sprintData?.sprint?.daysRemaining} days left
+                    {sprintData?.sprint?.daysRemaining || 0} days left
                   </span>
                   <button onClick={() => setShowConfig(true)} className="px-3 py-1.5 border border-gray-300 text-gray-700 text-xs rounded-lg hover:bg-gray-50">
                     ⚙️ Config
@@ -358,10 +354,10 @@
               <div className="space-y-4">
                 {/* Metrics */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <MetricCard icon="🎯" title="Completion" value={`${Math.round(sprintData.metrics.completionRate)}%`} subtitle={`${sprintData.metrics.pointsByStatus.done}/${sprintData.metrics.totalPoints} pts`} color="blue" />
-                  <MetricCard icon="📊" title="Total Issues" value={sprintData.metrics.issueCount} subtitle={`${sprintData.team.length} members`} color="green" />
-                  <MetricCard icon="🚫" title="Blocked" value={sprintData.metrics.byStatus.blocked} subtitle={`${sprintData.metrics.pointsByStatus.blocked} pts`} color={sprintData.metrics.byStatus.blocked > 0 ? 'red' : 'green'} />
-                  <MetricCard icon="⏰" title="Days Left" value={sprintData.sprint.daysRemaining} subtitle={`of ${sprintData.sprint.totalDays}`} color="purple" />
+                  <MetricCard icon="🎯" title="Completion" value={`${Math.round(sprintData.metrics.completionRate || 0)}%`} subtitle={`${sprintData.metrics.pointsByStatus.done || 0}/${sprintData.metrics.totalPoints || 0} pts`} color="blue" />
+                  <MetricCard icon="📊" title="Total Issues" value={sprintData.metrics.issueCount || 0} subtitle={`${sprintData.team?.length || 0} members`} color="green" />
+                  <MetricCard icon="🚫" title="Blocked" value={sprintData.metrics.byStatus.blocked || 0} subtitle={`${sprintData.metrics.pointsByStatus.blocked || 0} pts`} color={(sprintData.metrics.byStatus.blocked || 0) > 0 ? 'red' : 'green'} />
+                  <MetricCard icon="⏰" title="Days Left" value={sprintData.sprint?.daysRemaining || 0} subtitle={`of ${sprintData.sprint?.totalDays || 14}`} color="purple" />
                 </div>
 
                 {/* AI Analysis */}
@@ -385,7 +381,7 @@
                     <ResponsiveContainer width="100%" height={200}>
                       <PieChart>
                         <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2} dataKey="value" 
-                          label={({ name, value }) => `${name}: ${value}`}>
+                          label={({ name, value }) => value > 0 ? `${name}: ${value}` : ''}>
                           {pieData.map((entry, index) => <Cell key={index} fill={COLORS[index]} />)}
                         </Pie>
                         <Tooltip />
@@ -404,7 +400,7 @@
                     <h3 className="font-semibold text-gray-900 mb-3">⚠️ Risks</h3>
                     {aiAnalysis?.risks?.length > 0 ? (
                       aiAnalysis.risks.map((risk, i) => <RiskCard key={i} risk={risk} />)
-                    ) : sprintData.metrics.byStatus.blocked > 0 ? (
+                    ) : (sprintData.metrics.byStatus.blocked || 0) > 0 ? (
                       <RiskCard risk={{ severity: 'high', title: 'Blocked Items', description: `${sprintData.metrics.byStatus.blocked} item(s) blocked` }} />
                     ) : (
                       <p className="text-gray-500 text-xs">No major risks detected</p>
@@ -461,7 +457,7 @@
 
             {activeTab === 'team' && sprintData && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {sprintData.team.map(member => {
+                {(sprintData.team || []).length > 0 ? sprintData.team.map(member => {
                   const memberIssues = sprintData.issues.filter(i => i.assignee?.id === member.id);
                   const memberPoints = memberIssues.reduce((sum, i) => sum + (i.points || 0), 0);
                   const donePoints = memberIssues.filter(i => i.status.toLowerCase().includes('done')).reduce((sum, i) => sum + (i.points || 0), 0);
@@ -498,7 +494,9 @@
                       </div>
                     </div>
                   );
-                })}
+                }) : (
+                  <p className="text-gray-500 col-span-2 text-center py-8">No team members with assigned issues</p>
+                )}
               </div>
             )}
 
@@ -515,9 +513,9 @@
                     <button onClick={() => setSelectedMember('all')} className={`px-3 py-1.5 rounded-lg text-xs font-medium ${selectedMember === 'all' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}>
                       👥 Team
                     </button>
-                    {sprintData.team.map(m => (
+                    {(sprintData.team || []).map(m => (
                       <button key={m.id} onClick={() => setSelectedMember(m.id)} className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1 ${selectedMember === m.id ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}>
-                        <img src={m.avatar} className="w-4 h-4 rounded-full" /> {m.name.split(' ')[0]}
+                        <img src={m.avatar} className="w-4 h-4 rounded-full" alt="" /> {m.name.split(' ')[0]}
                       </button>
                     ))}
                   </div>
@@ -561,7 +559,7 @@
           {/* Footer */}
           <footer className="border-t border-gray-200 mt-6">
             <div className="max-w-6xl mx-auto px-4 py-3 text-center text-xs text-gray-500">
-              <p>Scrum Master Agent • Connected to <a href={`${CONFIG.JIRA_HOST}/projects/${CONFIG.PROJECT_KEY}`} target="_blank" className="text-indigo-600 hover:underline">{CONFIG.PROJECT_KEY}</a></p>
+              <p>Scrum Master Agent • Connected to <a href={`${CONFIG.JIRA_HOST}/projects/${CONFIG.PROJECT_KEY}`} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">{CONFIG.PROJECT_KEY}</a></p>
             </div>
           </footer>
         </div>
