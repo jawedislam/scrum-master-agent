@@ -1,6 +1,4 @@
 # Scrum Master Agent - Auto Deploy Workflow
-# 
-# Deploys to the root folder of your hosting
 
 name: Deploy Scrum Master Agent
 
@@ -42,7 +40,7 @@ jobs:
           username: ${{ secrets.FTP_USER }}
           password: ${{ secrets.FTP_PASS }}
           local-dir: ./deploy/
-          server-dir: /
+          server-dir: scrum-master.intra-tech.co/
           exclude: |
             **/.git*
             **/.git*/**
