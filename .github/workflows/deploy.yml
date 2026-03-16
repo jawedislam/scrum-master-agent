@@ -40,7 +40,7 @@ jobs:
           username: ${{ secrets.FTP_USER }}
           password: ${{ secrets.FTP_PASS }}
           local-dir: ./deploy/
-          server-dir: scrum-master.intra-tech.co/
+          server-dir: ./
           exclude: |
             **/.git*
             **/.git*/**
