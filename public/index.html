@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Scrum Master Agent v1.3</title>
+  <title>Scrum Master Agent v2.0</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -14,14 +14,18 @@
   <style>
     .loading-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+    .typing-indicator span { animation: blink 1.4s infinite both; }
+    .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes blink { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
   </style>
 </head>
 <body>
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect } = React;
-    const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } = Recharts;
+    const { useState, useEffect, useRef } = React;
+    const { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } = Recharts;
 
     // =========================================================================
     // CONFIGURATION
@@ -39,24 +43,37 @@
         name: "Strict Scrum Master",
         emoji: "📋",
         description: "By-the-book, flags all deviations",
-        prompt: `You are a strict scrum master. Flag all risks, push back on scope creep, use direct language. Reference ticket IDs. Respond in JSON: {"summary":"...","risks":[{"severity":"high|medium|low","title":"...","description":"..."}],"recommendations":[{"priority":1,"action":"...","detail":"..."}]}`
+        systemPrompt: `You are a strict scrum master. Flag all risks, push back on scope creep, use direct language. Reference ticket IDs when relevant.`
       },
       coach: {
         name: "Supportive Coach",
         emoji: "🤝",
         description: "Team-focused, celebrates wins",
-        prompt: `You are a supportive agile coach. Celebrate progress, focus on team wellbeing, offer help not blame. Reference team members by name. Respond in JSON: {"summary":"...","risks":[{"severity":"high|medium|low","title":"...","description":"..."}],"recommendations":[{"priority":1,"action":"...","detail":"..."}]}`
+        systemPrompt: `You are a supportive agile coach. Celebrate progress, focus on team wellbeing, offer help not blame. Reference team members by name when relevant.`
       },
       executive: {
         name: "Executive Reporter",
         emoji: "📊",
         description: "Bottom-line focused, concise",
-        prompt: `You report to executives. Lead with bottom line, use business language, max 3 bullets. Respond in JSON: {"summary":"...","risks":[{"severity":"high","title":"...","description":"..."}],"recommendations":[{"priority":1,"action":"...","detail":"..."}]}`
+        systemPrompt: `You report to executives. Lead with bottom line, use business language, be concise. Focus on metrics and outcomes.`
       }
     };
 
     // =========================================================================
-    // API FUNCTIONS (PHP hosting version)
+    // SUGGESTED QUESTIONS
+    // =========================================================================
+    const SUGGESTED_QUESTIONS = [
+      "How is the sprint going?",
+      "Who is performing well this sprint?",
+      "Who might need help?",
+      "What are the current blockers?",
+      "Summarize today's progress",
+      "Which tickets are at risk?",
+      "Give me a standup summary"
+    ];
+
+    // =========================================================================
+    // API FUNCTIONS
     // =========================================================================
     async function fetchSprintData() {
       try {
@@ -69,18 +86,18 @@
       }
     }
 
-    async function analyzeWithAI(sprintData, prompt) {
+    async function chatWithAgent(message, sprintData, personality, chatHistory = []) {
       try {
-        const response = await fetch('api.php?endpoint=analyze', {
+        const response = await fetch('api.php?endpoint=chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sprintData, prompt })
+          body: JSON.stringify({ message, sprintData, personality, chatHistory })
         });
-        if (!response.ok) throw new Error('AI analysis failed');
+        if (!response.ok) throw new Error('Chat failed');
         return await response.json();
       } catch (error) {
-        console.error('AI analysis error:', error);
-        return null;
+        console.error('Chat error:', error);
+        return { error: 'Failed to get response. Please try again.' };
       }
     }
 
@@ -121,35 +138,6 @@
       );
     };
 
-    const RiskCard = ({ risk }) => {
-      const severityStyles = {
-        high: 'border-l-red-500 bg-red-50',
-        medium: 'border-l-amber-500 bg-amber-50',
-        low: 'border-l-blue-500 bg-blue-50'
-      };
-      return (
-        <div className={`border-l-4 ${severityStyles[risk.severity] || severityStyles.medium} rounded-r-lg p-3 mb-2`}>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-sm">⚠️</span>
-            <h4 className="font-semibold text-gray-900 text-sm">{risk.title}</h4>
-          </div>
-          <p className="text-xs text-gray-700">{risk.description}</p>
-        </div>
-      );
-    };
-
-    const RecommendationCard = ({ rec }) => (
-      <div className="flex items-start gap-2 p-2 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg mb-2">
-        <div className="flex-shrink-0 w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-bold">
-          {rec.priority}
-        </div>
-        <div>
-          <h4 className="font-medium text-gray-900 text-sm">{rec.action}</h4>
-          <p className="text-xs text-gray-600">{rec.detail}</p>
-        </div>
-      </div>
-    );
-
     const HealthGauge = ({ score }) => {
       const getColor = (s) => s >= 70 ? '#10b981' : s >= 50 ? '#f59e0b' : '#ef4444';
       const getLabel = (s) => s >= 70 ? 'Healthy' : s >= 50 ? 'At Risk' : 'Critical';
@@ -173,23 +161,64 @@
       );
     };
 
+    const TypingIndicator = () => (
+      <div className="flex items-center gap-1 px-4 py-2">
+        <div className="typing-indicator flex gap-1">
+          <span className="w-2 h-2 bg-gray-400 rounded-full"></span>
+          <span className="w-2 h-2 bg-gray-400 rounded-full"></span>
+          <span className="w-2 h-2 bg-gray-400 rounded-full"></span>
+        </div>
+      </div>
+    );
+
+    const ChatMessage = ({ message, isUser, personality }) => (
+      <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
+        <div className={`max-w-[80%] ${isUser ? 'order-2' : 'order-1'}`}>
+          {!isUser && (
+            <div className="flex items-center gap-1 mb-1">
+              <span className="text-sm">{PROMPTS[personality]?.emoji || '🤖'}</span>
+              <span className="text-xs text-gray-500">{PROMPTS[personality]?.name || 'Scrum Master'}</span>
+            </div>
+          )}
+          <div className={`px-4 py-2 rounded-2xl ${
+            isUser 
+              ? 'bg-indigo-600 text-white rounded-br-md' 
+              : 'bg-gray-100 text-gray-800 rounded-bl-md'
+          }`}>
+            <p className="text-sm whitespace-pre-wrap">{message}</p>
+          </div>
+        </div>
+      </div>
+    );
+
     // =========================================================================
     // MAIN DASHBOARD
     // =========================================================================
     function Dashboard() {
       const [sprintData, setSprintData] = useState(null);
-      const [aiAnalysis, setAiAnalysis] = useState(null);
       const [loading, setLoading] = useState(true);
-      const [analyzing, setAnalyzing] = useState(false);
       const [error, setError] = useState(null);
-      const [activeTab, setActiveTab] = useState('overview');
+      const [activeTab, setActiveTab] = useState('chat');
       const [selectedPreset, setSelectedPreset] = useState('coach');
       const [showConfig, setShowConfig] = useState(false);
       const [selectedMember, setSelectedMember] = useState('all');
+      
+      // Chat state
+      const [chatMessages, setChatMessages] = useState([]);
+      const [chatInput, setChatInput] = useState('');
+      const [isTyping, setIsTyping] = useState(false);
+      const chatContainerRef = useRef(null);
 
       useEffect(() => {
         loadData();
       }, []);
+
+      useEffect(() => {
+        // Scroll to bottom when new messages arrive
+        if (chatContainerRef.current) {
+          chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+        }
+      }, [chatMessages, isTyping]);
 
       const loadData = async () => {
         setLoading(true);
@@ -197,21 +226,64 @@
         const data = await fetchSprintData();
         if (data && !data.error) {
           setSprintData(data);
+          // Add welcome message
+          if (chatMessages.length === 0) {
+            setChatMessages([{
+              id: 1,
+              text: `Hi! I'm your Scrum Master Agent 🤖. I have access to your current sprint data from JIRA. Ask me anything about the sprint, team performance, blockers, or progress!`,
+              isUser: false
+            }]);
+          }
         } else {
-          setError(data?.error || 'Failed to load sprint data. Check your API configuration.');
+          setError(data?.error || 'Failed to load sprint data.');
         }
         setLoading(false);
       };
 
-      const runAIAnalysis = async () => {
-        if (!sprintData) return;
-        setAnalyzing(true);
-        const result = await analyzeWithAI(sprintData, PROMPTS[selectedPreset].prompt);
-        setAiAnalysis(result);
-        setAnalyzing(false);
+      const sendMessage = async (messageText = chatInput) => {
+        if (!messageText.trim() || !sprintData) return;
+        
+        const userMessage = {
+          id: Date.now(),
+          text: messageText.trim(),
+          isUser: true
+        };
+        
+        setChatMessages(prev => [...prev, userMessage]);
+        setChatInput('');
+        setIsTyping(true);
+
+        // Prepare chat history for context (last 10 messages)
+        const history = chatMessages.slice(-10).map(m => ({
+          role: m.isUser ? 'user' : 'assistant',
+          content: m.text
+        }));
+
+        const response = await chatWithAgent(
+          messageText.trim(),
+          sprintData,
+          selectedPreset,
+          history
+        );
+
+        setIsTyping(false);
+
+        const botMessage = {
+          id: Date.now() + 1,
+          text: response.message || response.error || "I couldn't process that request.",
+          isUser: false
+        };
+        
+        setChatMessages(prev => [...prev, botMessage]);
       };
 
-      // Calculate health score
+      const handleKeyPress = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage();
+        }
+      };
+
       const calculateHealth = () => {
         if (!sprintData) return 50;
         const { metrics } = sprintData;
@@ -264,15 +336,15 @@
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
               <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6">
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className="font-bold text-gray-900">Agent Configuration</h2>
+                  <h2 className="font-bold text-gray-900">Agent Personality</h2>
                   <button onClick={() => setShowConfig(false)} className="text-gray-400 hover:text-gray-600">✕</button>
                 </div>
-                <p className="text-xs text-gray-500 mb-3">Select AI personality:</p>
+                <p className="text-xs text-gray-500 mb-3">Choose how your Scrum Master communicates:</p>
                 <div className="space-y-2">
                   {Object.entries(PROMPTS).map(([key, preset]) => (
                     <button
                       key={key}
-                      onClick={() => setSelectedPreset(key)}
+                      onClick={() => { setSelectedPreset(key); setShowConfig(false); }}
                       className={`w-full p-3 rounded-lg border text-left transition-all ${
                         selectedPreset === key ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'
                       }`}
@@ -285,12 +357,6 @@
                     </button>
                   ))}
                 </div>
-                <button 
-                  onClick={() => { setShowConfig(false); runAIAnalysis(); }}
-                  className="w-full mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
-                >
-                  Apply & Analyze
-                </button>
               </div>
             </div>
           )}
@@ -309,23 +375,14 @@
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {aiAnalysis && (
-                    <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs">
-                      {PROMPTS[selectedPreset].emoji} AI Active
-                    </span>
-                  )}
+                  <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs">
+                    {PROMPTS[selectedPreset].emoji} {PROMPTS[selectedPreset].name}
+                  </span>
                   <span className="text-xs text-gray-500">
                     {sprintData?.sprint?.daysRemaining || 0} days left
                   </span>
                   <button onClick={() => setShowConfig(true)} className="px-3 py-1.5 border border-gray-300 text-gray-700 text-xs rounded-lg hover:bg-gray-50">
-                    ⚙️ Config
-                  </button>
-                  <button 
-                    onClick={runAIAnalysis} 
-                    disabled={analyzing}
-                    className="px-3 py-1.5 bg-indigo-600 text-white text-xs rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-                  >
-                    {analyzing ? '⏳ Analyzing...' : '✨ AI Analysis'}
+                    ⚙️ Personality
                   </button>
                   <button onClick={loadData} className="px-3 py-1.5 border border-gray-300 text-gray-700 text-xs rounded-lg hover:bg-gray-50">
                     🔄
@@ -333,7 +390,7 @@
                 </div>
               </div>
               <div className="flex gap-1 mt-3">
-                {['overview', 'tickets', 'team', 'standup'].map(tab => (
+                {['chat', 'overview', 'tickets', 'team'].map(tab => (
                   <button 
                     key={tab} 
                     onClick={() => setActiveTab(tab)} 
@@ -341,7 +398,7 @@
                       activeTab === tab ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'
                     }`}
                   >
-                    {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                    {tab === 'chat' ? '💬 Chat' : tab.charAt(0).toUpperCase() + tab.slice(1)}
                   </button>
                 ))}
               </div>
@@ -350,9 +407,115 @@
 
           {/* Main Content */}
           <main className="max-w-6xl mx-auto px-4 py-4">
+            
+            {/* CHAT TAB */}
+            {activeTab === 'chat' && (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                {/* Chat Panel */}
+                <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100 flex flex-col" style={{ height: '70vh' }}>
+                  {/* Chat Messages */}
+                  <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4">
+                    {chatMessages.map(msg => (
+                      <ChatMessage key={msg.id} message={msg.text} isUser={msg.isUser} personality={selectedPreset} />
+                    ))}
+                    {isTyping && <TypingIndicator />}
+                  </div>
+
+                  {/* Suggested Questions */}
+                  {chatMessages.length <= 2 && (
+                    <div className="px-4 pb-2">
+                      <p className="text-xs text-gray-500 mb-2">Suggested questions:</p>
+                      <div className="flex flex-wrap gap-2">
+                        {SUGGESTED_QUESTIONS.slice(0, 4).map((q, i) => (
+                          <button
+                            key={i}
+                            onClick={() => sendMessage(q)}
+                            className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-full text-xs text-gray-700 transition-colors"
+                          >
+                            {q}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Input */}
+                  <div className="p-4 border-t border-gray-100">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={chatInput}
+                        onChange={(e) => setChatInput(e.target.value)}
+                        onKeyPress={handleKeyPress}
+                        placeholder="Ask about your sprint..."
+                        className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                        disabled={isTyping}
+                      />
+                      <button
+                        onClick={() => sendMessage()}
+                        disabled={!chatInput.trim() || isTyping}
+                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Send
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Quick Stats Sidebar */}
+                <div className="space-y-4">
+                  <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
+                    <h3 className="font-semibold text-gray-900 mb-3">Sprint Health</h3>
+                    <div className="flex justify-center">
+                      <HealthGauge score={calculateHealth()} />
+                    </div>
+                  </div>
+                  
+                  <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
+                    <h3 className="font-semibold text-gray-900 mb-3">Quick Stats</h3>
+                    <div className="space-y-2">
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Completion</span>
+                        <span className="font-semibold">{Math.round(sprintData?.metrics?.completionRate || 0)}%</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Issues</span>
+                        <span className="font-semibold">{sprintData?.metrics?.issueCount || 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Blocked</span>
+                        <span className={`font-semibold ${(sprintData?.metrics?.byStatus?.blocked || 0) > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {sprintData?.metrics?.byStatus?.blocked || 0}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Team Size</span>
+                        <span className="font-semibold">{sprintData?.team?.length || 0}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
+                    <h3 className="font-semibold text-gray-900 mb-3">Try Asking</h3>
+                    <div className="space-y-2">
+                      {SUGGESTED_QUESTIONS.slice(4).map((q, i) => (
+                        <button
+                          key={i}
+                          onClick={() => sendMessage(q)}
+                          className="w-full text-left px-3 py-2 bg-gray-50 hover:bg-gray-100 rounded-lg text-xs text-gray-700 transition-colors"
+                        >
+                          "{q}"
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* OVERVIEW TAB */}
             {activeTab === 'overview' && sprintData && (
               <div className="space-y-4">
-                {/* Metrics */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <MetricCard icon="🎯" title="Completion" value={`${Math.round(sprintData.metrics.completionRate || 0)}%`} subtitle={`${sprintData.metrics.pointsByStatus.done || 0}/${sprintData.metrics.totalPoints || 0} pts`} color="blue" />
                   <MetricCard icon="📊" title="Total Issues" value={sprintData.metrics.issueCount || 0} subtitle={`${sprintData.team?.length || 0} members`} color="green" />
@@ -360,21 +523,6 @@
                   <MetricCard icon="⏰" title="Days Left" value={sprintData.sprint?.daysRemaining || 0} subtitle={`of ${sprintData.sprint?.totalDays || 14}`} color="purple" />
                 </div>
 
-                {/* AI Analysis */}
-                {aiAnalysis && (
-                  <div className="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-xl p-4 border border-purple-200">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span>✨</span>
-                      <h3 className="font-semibold text-gray-900">AI Analysis</h3>
-                      <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">
-                        {PROMPTS[selectedPreset].emoji} {PROMPTS[selectedPreset].name}
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-700">{aiAnalysis.summary}</p>
-                  </div>
-                )}
-
-                {/* Charts + Health */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                   <div className="lg:col-span-2 bg-white rounded-xl p-4 shadow-sm border border-gray-100">
                     <h3 className="font-semibold text-gray-900 mb-3">Points Distribution</h3>
@@ -393,31 +541,10 @@
                     <HealthGauge score={calculateHealth()} />
                   </div>
                 </div>
-
-                {/* Risks + Recommendations */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
-                    <h3 className="font-semibold text-gray-900 mb-3">⚠️ Risks</h3>
-                    {aiAnalysis?.risks?.length > 0 ? (
-                      aiAnalysis.risks.map((risk, i) => <RiskCard key={i} risk={risk} />)
-                    ) : (sprintData.metrics.byStatus.blocked || 0) > 0 ? (
-                      <RiskCard risk={{ severity: 'high', title: 'Blocked Items', description: `${sprintData.metrics.byStatus.blocked} item(s) blocked` }} />
-                    ) : (
-                      <p className="text-gray-500 text-xs">No major risks detected</p>
-                    )}
-                  </div>
-                  <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
-                    <h3 className="font-semibold text-gray-900 mb-3">💡 Recommendations</h3>
-                    {aiAnalysis?.recommendations?.length > 0 ? (
-                      aiAnalysis.recommendations.map((rec, i) => <RecommendationCard key={i} rec={rec} />)
-                    ) : (
-                      <p className="text-gray-500 text-xs">Run AI analysis to get recommendations</p>
-                    )}
-                  </div>
-                </div>
               </div>
             )}
 
+            {/* TICKETS TAB */}
             {activeTab === 'tickets' && sprintData && (
               <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                 <table className="w-full">
@@ -455,6 +582,7 @@
               </div>
             )}
 
+            {/* TEAM TAB */}
             {activeTab === 'team' && sprintData && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {(sprintData.team || []).length > 0 ? sprintData.team.map(member => {
@@ -499,67 +627,12 @@
                 )}
               </div>
             )}
-
-            {activeTab === 'standup' && sprintData && (
-              <div className="max-w-xl mx-auto">
-                <div className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl p-4 text-white mb-4">
-                  <h2 className="text-lg font-bold">📅 Daily Standup</h2>
-                  <p className="text-indigo-100 text-sm">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
-                </div>
-
-                {/* Member selector */}
-                <div className="bg-white rounded-xl p-3 shadow-sm border mb-4">
-                  <div className="flex flex-wrap gap-2">
-                    <button onClick={() => setSelectedMember('all')} className={`px-3 py-1.5 rounded-lg text-xs font-medium ${selectedMember === 'all' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}>
-                      👥 Team
-                    </button>
-                    {(sprintData.team || []).map(m => (
-                      <button key={m.id} onClick={() => setSelectedMember(m.id)} className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1 ${selectedMember === m.id ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}>
-                        <img src={m.avatar} className="w-4 h-4 rounded-full" alt="" /> {m.name.split(' ')[0]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {(() => {
-                  const filtered = selectedMember === 'all' ? sprintData.issues : sprintData.issues.filter(i => i.assignee?.id === selectedMember);
-                  const done = filtered.filter(i => i.status.toLowerCase().includes('done'));
-                  const inProgress = filtered.filter(i => i.status.toLowerCase().includes('progress'));
-                  const blocked = filtered.filter(i => i.status.toLowerCase().includes('block'));
-
-                  return (
-                    <div className="space-y-3">
-                      <div className="bg-white rounded-xl p-4 shadow-sm border">
-                        <h3 className="font-semibold text-gray-900 mb-2">✅ Done ({done.length})</h3>
-                        {done.length > 0 ? done.map(i => (
-                          <p key={i.id} className="text-xs text-gray-700 mb-1">• {i.title}</p>
-                        )) : <p className="text-xs text-gray-400">No completed items</p>}
-                      </div>
-                      <div className="bg-white rounded-xl p-4 shadow-sm border">
-                        <h3 className="font-semibold text-gray-900 mb-2">🔄 In Progress ({inProgress.length})</h3>
-                        {inProgress.length > 0 ? inProgress.map(i => (
-                          <p key={i.id} className="text-xs text-gray-700 mb-1">• {i.title} {selectedMember === 'all' && i.assignee ? `(${i.assignee.name})` : ''}</p>
-                        )) : <p className="text-xs text-gray-400">No items in progress</p>}
-                      </div>
-                      {blocked.length > 0 && (
-                        <div className="bg-white rounded-xl p-4 shadow-sm border border-red-200">
-                          <h3 className="font-semibold text-gray-900 mb-2">🚫 Blocked ({blocked.length})</h3>
-                          {blocked.map(i => (
-                            <p key={i.id} className="text-xs text-red-700 mb-1">• {i.title}</p>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
           </main>
 
           {/* Footer */}
           <footer className="border-t border-gray-200 mt-6">
             <div className="max-w-6xl mx-auto px-4 py-3 text-center text-xs text-gray-500">
-              <p>Scrum Master Agent • Connected to <a href={`${CONFIG.JIRA_HOST}/projects/${CONFIG.PROJECT_KEY}`} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">{CONFIG.PROJECT_KEY}</a></p>
+              <p>Scrum Master Agent v2.0 • Connected to <a href={`${CONFIG.JIRA_HOST}/projects/${CONFIG.PROJECT_KEY}`} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">{CONFIG.PROJECT_KEY}</a> • Deployed via CI/CD ✅</p>
             </div>
           </footer>
         </div>
