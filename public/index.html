@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Scrum Master Agent v2.0</title>
+  <title>Scrum Master Agent v2.1</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -27,54 +27,28 @@
     const { useState, useEffect, useRef } = React;
     const { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } = Recharts;
 
-    // =========================================================================
-    // CONFIGURATION
-    // =========================================================================
     const CONFIG = {
       JIRA_HOST: 'https://jawedislam85.atlassian.net',
       PROJECT_KEY: 'SAT'
     };
 
-    // =========================================================================
-    // PROMPT PRESETS
-    // =========================================================================
     const PROMPTS = {
-      strict: {
-        name: "Strict Scrum Master",
-        emoji: "📋",
-        description: "By-the-book, flags all deviations",
-        systemPrompt: `You are a strict scrum master. Flag all risks, push back on scope creep, use direct language. Reference ticket IDs when relevant.`
-      },
-      coach: {
-        name: "Supportive Coach",
-        emoji: "🤝",
-        description: "Team-focused, celebrates wins",
-        systemPrompt: `You are a supportive agile coach. Celebrate progress, focus on team wellbeing, offer help not blame. Reference team members by name when relevant.`
-      },
-      executive: {
-        name: "Executive Reporter",
-        emoji: "📊",
-        description: "Bottom-line focused, concise",
-        systemPrompt: `You report to executives. Lead with bottom line, use business language, be concise. Focus on metrics and outcomes.`
-      }
+      strict: { name: "Strict Scrum Master", emoji: "📋", description: "By-the-book, flags all deviations" },
+      coach: { name: "Supportive Coach", emoji: "🤝", description: "Team-focused, celebrates wins" },
+      executive: { name: "Executive Reporter", emoji: "📊", description: "Bottom-line focused, concise" }
     };
 
-    // =========================================================================
-    // SUGGESTED QUESTIONS
-    // =========================================================================
     const SUGGESTED_QUESTIONS = [
       "How is the sprint going?",
-      "Who is performing well this sprint?",
+      "Who is performing well?",
       "Who might need help?",
-      "What are the current blockers?",
-      "Summarize today's progress",
-      "Which tickets are at risk?",
-      "Give me a standup summary"
+      "What are the blockers?",
+      "Send standup summary to team",
+      "Send sprint health report",
+      "Summarize progress for today"
     ];
 
-    // =========================================================================
-    // API FUNCTIONS
-    // =========================================================================
+    // API Functions
     async function fetchSprintData() {
       try {
         const response = await fetch('api.php?endpoint=sprint-data');
@@ -101,9 +75,22 @@
       }
     }
 
-    // =========================================================================
-    // COMPONENTS
-    // =========================================================================
+    async function sendEmail(emailType, recipients, sprintData, customMessage = '') {
+      try {
+        const response = await fetch('api.php?endpoint=send-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ emailType, recipients, sprintData, customMessage })
+        });
+        if (!response.ok) throw new Error('Email failed');
+        return await response.json();
+      } catch (error) {
+        console.error('Email error:', error);
+        return { error: 'Failed to send email.' };
+      }
+    }
+
+    // Components
     const StatusBadge = ({ status }) => {
       const getStyle = (s) => {
         const lower = s.toLowerCase();
@@ -125,9 +112,7 @@
       return (
         <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
           <div className="flex items-start justify-between">
-            <div className={`p-2 rounded-lg ${colorStyles[color]}`}>
-              <span className="text-lg">{icon}</span>
-            </div>
+            <div className={`p-2 rounded-lg ${colorStyles[color]}`}><span className="text-lg">{icon}</span></div>
             {subtitle && <span className="text-xs text-gray-500">{subtitle}</span>}
           </div>
           <div className="mt-2">
@@ -154,8 +139,7 @@
             </div>
           </div>
           <span className={`mt-1 px-2 py-0.5 rounded-full text-xs font-medium ${
-            score >= 70 ? 'bg-emerald-100 text-emerald-800' : 
-            score >= 50 ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'
+            score >= 70 ? 'bg-emerald-100 text-emerald-800' : score >= 50 ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'
           }`}>{getLabel(score)}</span>
         </div>
       );
@@ -180,20 +164,115 @@
               <span className="text-xs text-gray-500">{PROMPTS[personality]?.name || 'Scrum Master'}</span>
             </div>
           )}
-          <div className={`px-4 py-2 rounded-2xl ${
-            isUser 
-              ? 'bg-indigo-600 text-white rounded-br-md' 
-              : 'bg-gray-100 text-gray-800 rounded-bl-md'
-          }`}>
+          <div className={`px-4 py-2 rounded-2xl ${isUser ? 'bg-indigo-600 text-white rounded-br-md' : 'bg-gray-100 text-gray-800 rounded-bl-md'}`}>
             <p className="text-sm whitespace-pre-wrap">{message}</p>
           </div>
         </div>
       </div>
     );
 
-    // =========================================================================
-    // MAIN DASHBOARD
-    // =========================================================================
+    const EmailConfirmModal = ({ emailAction, sprintData, team, onConfirm, onCancel }) => {
+      const [selectedRecipients, setSelectedRecipients] = useState([]);
+      const [customEmail, setCustomEmail] = useState('');
+      
+      const teamEmails = team.filter(m => m.email).map(m => ({ name: m.name, email: m.email }));
+      
+      const toggleRecipient = (email) => {
+        setSelectedRecipients(prev => 
+          prev.includes(email) ? prev.filter(e => e !== email) : [...prev, email]
+        );
+      };
+      
+      const selectAll = () => {
+        setSelectedRecipients(teamEmails.map(m => m.email));
+      };
+      
+      const addCustomEmail = () => {
+        if (customEmail && customEmail.includes('@')) {
+          setSelectedRecipients(prev => [...prev, customEmail]);
+          setCustomEmail('');
+        }
+      };
+
+      return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-2xl">📧</span>
+              <h2 className="font-bold text-gray-900">Send Email</h2>
+            </div>
+            
+            <p className="text-sm text-gray-600 mb-4">
+              {emailAction.emailType === 'standup' && 'Send daily standup summary'}
+              {emailAction.emailType === 'health' && 'Send sprint health report'}
+              {emailAction.emailType === 'custom' && 'Send custom message'}
+            </p>
+            
+            <div className="mb-4">
+              <div className="flex justify-between items-center mb-2">
+                <label className="text-sm font-medium text-gray-700">Recipients</label>
+                <button onClick={selectAll} className="text-xs text-indigo-600 hover:underline">Select all team</button>
+              </div>
+              
+              <div className="max-h-40 overflow-y-auto border rounded-lg p-2 space-y-1">
+                {teamEmails.map(member => (
+                  <label key={member.email} className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={selectedRecipients.includes(member.email)}
+                      onChange={() => toggleRecipient(member.email)}
+                      className="rounded text-indigo-600"
+                    />
+                    <span className="text-sm">{member.name}</span>
+                    <span className="text-xs text-gray-500">{member.email}</span>
+                  </label>
+                ))}
+                {teamEmails.length === 0 && (
+                  <p className="text-sm text-gray-500 p-2">No team emails found in JIRA</p>
+                )}
+              </div>
+              
+              <div className="flex gap-2 mt-2">
+                <input
+                  type="email"
+                  value={customEmail}
+                  onChange={(e) => setCustomEmail(e.target.value)}
+                  placeholder="Add custom email..."
+                  className="flex-1 px-3 py-2 border rounded-lg text-sm"
+                />
+                <button onClick={addCustomEmail} className="px-3 py-2 bg-gray-100 rounded-lg text-sm hover:bg-gray-200">Add</button>
+              </div>
+              
+              {selectedRecipients.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {selectedRecipients.map(email => (
+                    <span key={email} className="px-2 py-1 bg-indigo-100 text-indigo-700 rounded-full text-xs flex items-center gap-1">
+                      {email}
+                      <button onClick={() => toggleRecipient(email)} className="hover:text-indigo-900">×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            
+            <div className="flex gap-2">
+              <button onClick={onCancel} className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">
+                Cancel
+              </button>
+              <button 
+                onClick={() => onConfirm(selectedRecipients)}
+                disabled={selectedRecipients.length === 0}
+                className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+              >
+                Send ({selectedRecipients.length})
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // Main Dashboard
     function Dashboard() {
       const [sprintData, setSprintData] = useState(null);
       const [loading, setLoading] = useState(true);
@@ -201,20 +280,16 @@
       const [activeTab, setActiveTab] = useState('chat');
       const [selectedPreset, setSelectedPreset] = useState('coach');
       const [showConfig, setShowConfig] = useState(false);
-      const [selectedMember, setSelectedMember] = useState('all');
       
-      // Chat state
       const [chatMessages, setChatMessages] = useState([]);
       const [chatInput, setChatInput] = useState('');
       const [isTyping, setIsTyping] = useState(false);
+      const [pendingEmailAction, setPendingEmailAction] = useState(null);
       const chatContainerRef = useRef(null);
 
-      useEffect(() => {
-        loadData();
-      }, []);
+      useEffect(() => { loadData(); }, []);
 
       useEffect(() => {
-        // Scroll to bottom when new messages arrive
         if (chatContainerRef.current) {
           chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
         }
@@ -226,11 +301,10 @@
         const data = await fetchSprintData();
         if (data && !data.error) {
           setSprintData(data);
-          // Add welcome message
           if (chatMessages.length === 0) {
             setChatMessages([{
               id: 1,
-              text: `Hi! I'm your Scrum Master Agent 🤖. I have access to your current sprint data from JIRA. Ask me anything about the sprint, team performance, blockers, or progress!`,
+              text: `Hi! I'm your Scrum Master Agent 🤖\n\nI can help you with:\n• Sprint status and progress\n• Team performance insights\n• Identifying blockers and risks\n• Sending email updates to the team\n\nTry asking "Send standup summary to team" or "Who needs help?"`,
               isUser: false
             }]);
           }
@@ -243,37 +317,61 @@
       const sendMessage = async (messageText = chatInput) => {
         if (!messageText.trim() || !sprintData) return;
         
-        const userMessage = {
-          id: Date.now(),
-          text: messageText.trim(),
-          isUser: true
-        };
-        
+        const userMessage = { id: Date.now(), text: messageText.trim(), isUser: true };
         setChatMessages(prev => [...prev, userMessage]);
         setChatInput('');
         setIsTyping(true);
 
-        // Prepare chat history for context (last 10 messages)
         const history = chatMessages.slice(-10).map(m => ({
           role: m.isUser ? 'user' : 'assistant',
           content: m.text
         }));
 
-        const response = await chatWithAgent(
-          messageText.trim(),
-          sprintData,
-          selectedPreset,
-          history
-        );
-
+        const response = await chatWithAgent(messageText.trim(), sprintData, selectedPreset, history);
         setIsTyping(false);
 
+        // Check if there's an email action
+        if (response.emailAction) {
+          setPendingEmailAction(response.emailAction);
+          const botMessage = {
+            id: Date.now() + 1,
+            text: "I'll help you send that email. Please select the recipients:",
+            isUser: false
+          };
+          setChatMessages(prev => [...prev, botMessage]);
+        } else {
+          const botMessage = {
+            id: Date.now() + 1,
+            text: response.message || response.error || "I couldn't process that request.",
+            isUser: false
+          };
+          setChatMessages(prev => [...prev, botMessage]);
+        }
+      };
+
+      const handleEmailConfirm = async (recipients) => {
+        if (!pendingEmailAction || recipients.length === 0) return;
+        
+        setPendingEmailAction(null);
+        setIsTyping(true);
+        
+        const result = await sendEmail(
+          pendingEmailAction.emailType,
+          recipients,
+          sprintData,
+          pendingEmailAction.customMessage || ''
+        );
+        
+        setIsTyping(false);
+        
+        const successCount = result.results?.filter(r => r.result?.success).length || 0;
         const botMessage = {
-          id: Date.now() + 1,
-          text: response.message || response.error || "I couldn't process that request.",
+          id: Date.now(),
+          text: successCount > 0 
+            ? `✅ Successfully sent ${successCount} email(s)!\n\nRecipients:\n${recipients.map(r => '• ' + r).join('\n')}`
+            : `❌ Failed to send emails. Please check your SMTP configuration.`,
           isUser: false
         };
-        
         setChatMessages(prev => [...prev, botMessage]);
       };
 
@@ -314,9 +412,7 @@
               <div className="text-4xl mb-4">⚠️</div>
               <h2 className="text-xl font-bold text-gray-900 mb-2">Connection Error</h2>
               <p className="text-gray-600 mb-4">{error}</p>
-              <button onClick={loadData} className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
-                Retry
-              </button>
+              <button onClick={loadData} className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">Retry</button>
             </div>
           </div>
         );
@@ -331,6 +427,17 @@
 
       return (
         <div className="min-h-screen bg-gray-50 text-sm">
+          {/* Email Confirm Modal */}
+          {pendingEmailAction && (
+            <EmailConfirmModal 
+              emailAction={pendingEmailAction}
+              sprintData={sprintData}
+              team={sprintData?.team || []}
+              onConfirm={handleEmailConfirm}
+              onCancel={() => setPendingEmailAction(null)}
+            />
+          )}
+
           {/* Config Modal */}
           {showConfig && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -339,16 +446,10 @@
                   <h2 className="font-bold text-gray-900">Agent Personality</h2>
                   <button onClick={() => setShowConfig(false)} className="text-gray-400 hover:text-gray-600">✕</button>
                 </div>
-                <p className="text-xs text-gray-500 mb-3">Choose how your Scrum Master communicates:</p>
                 <div className="space-y-2">
                   {Object.entries(PROMPTS).map(([key, preset]) => (
-                    <button
-                      key={key}
-                      onClick={() => { setSelectedPreset(key); setShowConfig(false); }}
-                      className={`w-full p-3 rounded-lg border text-left transition-all ${
-                        selectedPreset === key ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'
-                      }`}
-                    >
+                    <button key={key} onClick={() => { setSelectedPreset(key); setShowConfig(false); }}
+                      className={`w-full p-3 rounded-lg border text-left transition-all ${selectedPreset === key ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'}`}>
                       <div className="flex items-center gap-2">
                         <span>{preset.emoji}</span>
                         <span className="font-medium">{preset.name}</span>
@@ -378,26 +479,15 @@
                   <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs">
                     {PROMPTS[selectedPreset].emoji} {PROMPTS[selectedPreset].name}
                   </span>
-                  <span className="text-xs text-gray-500">
-                    {sprintData?.sprint?.daysRemaining || 0} days left
-                  </span>
-                  <button onClick={() => setShowConfig(true)} className="px-3 py-1.5 border border-gray-300 text-gray-700 text-xs rounded-lg hover:bg-gray-50">
-                    ⚙️ Personality
-                  </button>
-                  <button onClick={loadData} className="px-3 py-1.5 border border-gray-300 text-gray-700 text-xs rounded-lg hover:bg-gray-50">
-                    🔄
-                  </button>
+                  <span className="text-xs text-gray-500">{sprintData?.sprint?.daysRemaining || 0} days left</span>
+                  <button onClick={() => setShowConfig(true)} className="px-3 py-1.5 border border-gray-300 text-gray-700 text-xs rounded-lg hover:bg-gray-50">⚙️</button>
+                  <button onClick={loadData} className="px-3 py-1.5 border border-gray-300 text-gray-700 text-xs rounded-lg hover:bg-gray-50">🔄</button>
                 </div>
               </div>
               <div className="flex gap-1 mt-3">
                 {['chat', 'overview', 'tickets', 'team'].map(tab => (
-                  <button 
-                    key={tab} 
-                    onClick={() => setActiveTab(tab)} 
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
-                      activeTab === tab ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'
-                    }`}
-                  >
+                  <button key={tab} onClick={() => setActiveTab(tab)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium ${activeTab === tab ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'}`}>
                     {tab === 'chat' ? '💬 Chat' : tab.charAt(0).toUpperCase() + tab.slice(1)}
                   </button>
                 ))}
@@ -407,122 +497,81 @@
 
           {/* Main Content */}
           <main className="max-w-6xl mx-auto px-4 py-4">
-            
-            {/* CHAT TAB */}
+            {/* Chat Tab */}
             {activeTab === 'chat' && (
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                {/* Chat Panel */}
                 <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100 flex flex-col" style={{ height: '70vh' }}>
-                  {/* Chat Messages */}
                   <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4">
                     {chatMessages.map(msg => (
                       <ChatMessage key={msg.id} message={msg.text} isUser={msg.isUser} personality={selectedPreset} />
                     ))}
                     {isTyping && <TypingIndicator />}
                   </div>
-
-                  {/* Suggested Questions */}
                   {chatMessages.length <= 2 && (
                     <div className="px-4 pb-2">
-                      <p className="text-xs text-gray-500 mb-2">Suggested questions:</p>
+                      <p className="text-xs text-gray-500 mb-2">Suggested:</p>
                       <div className="flex flex-wrap gap-2">
                         {SUGGESTED_QUESTIONS.slice(0, 4).map((q, i) => (
-                          <button
-                            key={i}
-                            onClick={() => sendMessage(q)}
-                            className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-full text-xs text-gray-700 transition-colors"
-                          >
+                          <button key={i} onClick={() => sendMessage(q)}
+                            className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-full text-xs text-gray-700">
                             {q}
                           </button>
                         ))}
                       </div>
                     </div>
                   )}
-
-                  {/* Input */}
                   <div className="p-4 border-t border-gray-100">
                     <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={chatInput}
-                        onChange={(e) => setChatInput(e.target.value)}
-                        onKeyPress={handleKeyPress}
-                        placeholder="Ask about your sprint..."
-                        className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                        disabled={isTyping}
-                      />
-                      <button
-                        onClick={() => sendMessage()}
-                        disabled={!chatInput.trim() || isTyping}
-                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
+                      <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)}
+                        onKeyPress={handleKeyPress} placeholder="Ask about your sprint or send an email..."
+                        className="flex-1 px-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        disabled={isTyping} />
+                      <button onClick={() => sendMessage()} disabled={!chatInput.trim() || isTyping}
+                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50">
                         Send
                       </button>
                     </div>
                   </div>
                 </div>
-
-                {/* Quick Stats Sidebar */}
                 <div className="space-y-4">
                   <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
                     <h3 className="font-semibold text-gray-900 mb-3">Sprint Health</h3>
-                    <div className="flex justify-center">
-                      <HealthGauge score={calculateHealth()} />
-                    </div>
+                    <div className="flex justify-center"><HealthGauge score={calculateHealth()} /></div>
                   </div>
-                  
                   <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
                     <h3 className="font-semibold text-gray-900 mb-3">Quick Stats</h3>
-                    <div className="space-y-2">
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Completion</span>
-                        <span className="font-semibold">{Math.round(sprintData?.metrics?.completionRate || 0)}%</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Issues</span>
-                        <span className="font-semibold">{sprintData?.metrics?.issueCount || 0}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Blocked</span>
-                        <span className={`font-semibold ${(sprintData?.metrics?.byStatus?.blocked || 0) > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                          {sprintData?.metrics?.byStatus?.blocked || 0}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Team Size</span>
-                        <span className="font-semibold">{sprintData?.team?.length || 0}</span>
-                      </div>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between"><span className="text-gray-600">Completion</span><span className="font-semibold">{Math.round(sprintData?.metrics?.completionRate || 0)}%</span></div>
+                      <div className="flex justify-between"><span className="text-gray-600">Issues</span><span className="font-semibold">{sprintData?.metrics?.issueCount || 0}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-600">Blocked</span><span className={`font-semibold ${(sprintData?.metrics?.byStatus?.blocked || 0) > 0 ? 'text-red-600' : 'text-green-600'}`}>{sprintData?.metrics?.byStatus?.blocked || 0}</span></div>
                     </div>
                   </div>
-
                   <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
-                    <h3 className="font-semibold text-gray-900 mb-3">Try Asking</h3>
+                    <h3 className="font-semibold text-gray-900 mb-3">📧 Quick Actions</h3>
                     <div className="space-y-2">
-                      {SUGGESTED_QUESTIONS.slice(4).map((q, i) => (
-                        <button
-                          key={i}
-                          onClick={() => sendMessage(q)}
-                          className="w-full text-left px-3 py-2 bg-gray-50 hover:bg-gray-100 rounded-lg text-xs text-gray-700 transition-colors"
-                        >
-                          "{q}"
-                        </button>
-                      ))}
+                      <button onClick={() => sendMessage("Send standup summary to the team")}
+                        className="w-full text-left px-3 py-2 bg-indigo-50 hover:bg-indigo-100 rounded-lg text-xs text-indigo-700">
+                        Send Standup Summary
+                      </button>
+                      <button onClick={() => sendMessage("Send sprint health report")}
+                        className="w-full text-left px-3 py-2 bg-purple-50 hover:bg-purple-100 rounded-lg text-xs text-purple-700">
+                        Send Health Report
+                      </button>
                     </div>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* OVERVIEW TAB */}
+            {/* Overview Tab */}
             {activeTab === 'overview' && sprintData && (
               <div className="space-y-4">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <MetricCard icon="🎯" title="Completion" value={`${Math.round(sprintData.metrics.completionRate || 0)}%`} subtitle={`${sprintData.metrics.pointsByStatus.done || 0}/${sprintData.metrics.totalPoints || 0} pts`} color="blue" />
                   <MetricCard icon="📊" title="Total Issues" value={sprintData.metrics.issueCount || 0} subtitle={`${sprintData.team?.length || 0} members`} color="green" />
-                  <MetricCard icon="🚫" title="Blocked" value={sprintData.metrics.byStatus.blocked || 0} subtitle={`${sprintData.metrics.pointsByStatus.blocked || 0} pts`} color={(sprintData.metrics.byStatus.blocked || 0) > 0 ? 'red' : 'green'} />
+                  <MetricCard icon="🚫" title="Blocked" value={sprintData.metrics.byStatus.blocked || 0} color={(sprintData.metrics.byStatus.blocked || 0) > 0 ? 'red' : 'green'} />
                   <MetricCard icon="⏰" title="Days Left" value={sprintData.sprint?.daysRemaining || 0} subtitle={`of ${sprintData.sprint?.totalDays || 14}`} color="purple" />
                 </div>
-
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                   <div className="lg:col-span-2 bg-white rounded-xl p-4 shadow-sm border border-gray-100">
                     <h3 className="font-semibold text-gray-900 mb-3">Points Distribution</h3>
@@ -544,7 +593,7 @@
               </div>
             )}
 
-            {/* TICKETS TAB */}
+            {/* Tickets Tab */}
             {activeTab === 'tickets' && sprintData && (
               <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                 <table className="w-full">
@@ -582,10 +631,10 @@
               </div>
             )}
 
-            {/* TEAM TAB */}
+            {/* Team Tab */}
             {activeTab === 'team' && sprintData && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {(sprintData.team || []).length > 0 ? sprintData.team.map(member => {
+                {(sprintData.team || []).map(member => {
                   const memberIssues = sprintData.issues.filter(i => i.assignee?.id === member.id);
                   const memberPoints = memberIssues.reduce((sum, i) => sum + (i.points || 0), 0);
                   const donePoints = memberIssues.filter(i => i.status.toLowerCase().includes('done')).reduce((sum, i) => sum + (i.points || 0), 0);
@@ -595,22 +644,13 @@
                         <img src={member.avatar} alt="" className="w-10 h-10 rounded-full" />
                         <div>
                           <h3 className="font-semibold text-gray-900">{member.name}</h3>
-                          <p className="text-xs text-gray-500">{member.email}</p>
+                          <p className="text-xs text-gray-500">{member.email || 'No email'}</p>
                         </div>
                       </div>
                       <div className="flex gap-4 mb-3">
-                        <div className="text-center">
-                          <p className="text-lg font-bold text-gray-900">{memberIssues.length}</p>
-                          <p className="text-xs text-gray-500">Issues</p>
-                        </div>
-                        <div className="text-center">
-                          <p className="text-lg font-bold text-gray-900">{memberPoints}</p>
-                          <p className="text-xs text-gray-500">Points</p>
-                        </div>
-                        <div className="text-center">
-                          <p className="text-lg font-bold text-emerald-600">{memberPoints > 0 ? Math.round((donePoints / memberPoints) * 100) : 0}%</p>
-                          <p className="text-xs text-gray-500">Done</p>
-                        </div>
+                        <div className="text-center"><p className="text-lg font-bold text-gray-900">{memberIssues.length}</p><p className="text-xs text-gray-500">Issues</p></div>
+                        <div className="text-center"><p className="text-lg font-bold text-gray-900">{memberPoints}</p><p className="text-xs text-gray-500">Points</p></div>
+                        <div className="text-center"><p className="text-lg font-bold text-emerald-600">{memberPoints > 0 ? Math.round((donePoints / memberPoints) * 100) : 0}%</p><p className="text-xs text-gray-500">Done</p></div>
                       </div>
                       <div className="space-y-1">
                         {memberIssues.slice(0, 3).map(issue => (
@@ -622,17 +662,14 @@
                       </div>
                     </div>
                   );
-                }) : (
-                  <p className="text-gray-500 col-span-2 text-center py-8">No team members with assigned issues</p>
-                )}
+                })}
               </div>
             )}
           </main>
 
-          {/* Footer */}
           <footer className="border-t border-gray-200 mt-6">
             <div className="max-w-6xl mx-auto px-4 py-3 text-center text-xs text-gray-500">
-              <p>Scrum Master Agent v2.0 • Connected to <a href={`${CONFIG.JIRA_HOST}/projects/${CONFIG.PROJECT_KEY}`} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">{CONFIG.PROJECT_KEY}</a> • Deployed via CI/CD ✅</p>
+              <p>Scrum Master Agent v2.1 • Connected to <a href={`${CONFIG.JIRA_HOST}/projects/${CONFIG.PROJECT_KEY}`} target="_blank" className="text-indigo-600 hover:underline">{CONFIG.PROJECT_KEY}</a> • 📧 Email Enabled</p>
             </div>
           </footer>
         </div>

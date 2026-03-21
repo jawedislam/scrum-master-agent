@@ -1,7 +1,7 @@
 <?php
 /**
- * Scrum Master Agent - PHP API v2.0
- * Now with Chat functionality
+ * Scrum Master Agent - PHP API v2.1
+ * Now with Chat + Email functionality
  */
 
 header('Content-Type: application/json');
@@ -68,6 +68,196 @@ function searchIssues($jql, $fields = [], $maxResults = 100) {
 }
 
 /**
+ * Send email via Gmail SMTP
+ */
+function sendEmail($to, $subject, $htmlBody, $textBody = '') {
+    if (!defined('SMTP_EMAIL') || !defined('SMTP_PASSWORD')) {
+        return ['error' => 'Email not configured. Add SMTP_EMAIL and SMTP_PASSWORD to config.php'];
+    }
+    
+    $smtpServer = 'smtp.gmail.com';
+    $smtpPort = 587;
+    $from = SMTP_EMAIL;
+    $fromName = 'Scrum Master Agent';
+    
+    // Create boundary for multipart email
+    $boundary = md5(time());
+    
+    // Build headers
+    $headers = [
+        'MIME-Version: 1.0',
+        'From: ' . $fromName . ' <' . $from . '>',
+        'Reply-To: ' . $from,
+        'Content-Type: multipart/alternative; boundary="' . $boundary . '"',
+        'X-Mailer: Scrum-Master-Agent/2.1'
+    ];
+    
+    // Build message body
+    $message = "--$boundary\r\n";
+    $message .= "Content-Type: text/plain; charset=UTF-8\r\n\r\n";
+    $message .= ($textBody ?: strip_tags($htmlBody)) . "\r\n\r\n";
+    $message .= "--$boundary\r\n";
+    $message .= "Content-Type: text/html; charset=UTF-8\r\n\r\n";
+    $message .= $htmlBody . "\r\n\r\n";
+    $message .= "--$boundary--";
+    
+    // Connect to SMTP server
+    $socket = @fsockopen('tls://' . $smtpServer, 465, $errno, $errstr, 30);
+    
+    if (!$socket) {
+        // Try alternate port
+        $socket = @fsockopen($smtpServer, $smtpPort, $errno, $errstr, 30);
+        if (!$socket) {
+            return ['error' => "Could not connect to SMTP server: $errstr"];
+        }
+        // Read greeting
+        fgets($socket, 512);
+        // Send EHLO
+        fputs($socket, "EHLO localhost\r\n");
+        fgets($socket, 512);
+        // Start TLS
+        fputs($socket, "STARTTLS\r\n");
+        fgets($socket, 512);
+        stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
+        // EHLO again after TLS
+        fputs($socket, "EHLO localhost\r\n");
+        fgets($socket, 512);
+    } else {
+        // Read greeting
+        fgets($socket, 512);
+        // Send EHLO
+        fputs($socket, "EHLO localhost\r\n");
+        fgets($socket, 512);
+    }
+    
+    // Authenticate
+    fputs($socket, "AUTH LOGIN\r\n");
+    fgets($socket, 512);
+    fputs($socket, base64_encode(SMTP_EMAIL) . "\r\n");
+    fgets($socket, 512);
+    fputs($socket, base64_encode(SMTP_PASSWORD) . "\r\n");
+    $authResponse = fgets($socket, 512);
+    
+    if (strpos($authResponse, '235') === false) {
+        fclose($socket);
+        return ['error' => 'SMTP authentication failed. Check your email and app password.'];
+    }
+    
+    // Send email
+    fputs($socket, "MAIL FROM:<$from>\r\n");
+    fgets($socket, 512);
+    fputs($socket, "RCPT TO:<$to>\r\n");
+    fgets($socket, 512);
+    fputs($socket, "DATA\r\n");
+    fgets($socket, 512);
+    
+    // Send headers and body
+    fputs($socket, "Subject: $subject\r\n");
+    fputs($socket, implode("\r\n", $headers) . "\r\n");
+    fputs($socket, "\r\n" . $message . "\r\n.\r\n");
+    $dataResponse = fgets($socket, 512);
+    
+    fputs($socket, "QUIT\r\n");
+    fclose($socket);
+    
+    if (strpos($dataResponse, '250') !== false) {
+        return ['success' => true, 'message' => "Email sent to $to"];
+    } else {
+        return ['error' => 'Failed to send email'];
+    }
+}
+
+/**
+ * Generate HTML email template
+ */
+function generateEmailTemplate($type, $data) {
+    $styles = '
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0; }
+        .content { background: #f9fafb; padding: 20px; border: 1px solid #e5e7eb; }
+        .footer { background: #f3f4f6; padding: 15px; text-align: center; font-size: 12px; color: #6b7280; border-radius: 0 0 10px 10px; }
+        .metric { display: inline-block; padding: 10px 15px; margin: 5px; background: white; border-radius: 8px; text-align: center; }
+        .metric-value { font-size: 24px; font-weight: bold; color: #4f46e5; }
+        .metric-label { font-size: 12px; color: #6b7280; }
+        .status-done { color: #059669; }
+        .status-progress { color: #2563eb; }
+        .status-blocked { color: #dc2626; }
+        .issue { padding: 10px; background: white; margin: 5px 0; border-radius: 5px; border-left: 3px solid #4f46e5; }
+    ';
+    
+    $html = '<!DOCTYPE html><html><head><style>' . $styles . '</style></head><body><div class="container">';
+    
+    switch ($type) {
+        case 'standup':
+            $html .= '<div class="header"><h2>📅 Daily Standup Summary</h2><p>' . date('l, F j, Y') . '</p></div>';
+            $html .= '<div class="content">';
+            $html .= '<h3>Sprint: ' . ($data['sprint']['name'] ?? 'Current Sprint') . '</h3>';
+            
+            // Metrics
+            $html .= '<div style="text-align: center; margin: 20px 0;">';
+            $html .= '<div class="metric"><div class="metric-value">' . round($data['metrics']['completionRate'] ?? 0) . '%</div><div class="metric-label">Complete</div></div>';
+            $html .= '<div class="metric"><div class="metric-value">' . ($data['metrics']['byStatus']['inProgress'] ?? 0) . '</div><div class="metric-label">In Progress</div></div>';
+            $html .= '<div class="metric"><div class="metric-value">' . ($data['metrics']['byStatus']['blocked'] ?? 0) . '</div><div class="metric-label">Blocked</div></div>';
+            $html .= '<div class="metric"><div class="metric-value">' . ($data['sprint']['daysRemaining'] ?? 0) . '</div><div class="metric-label">Days Left</div></div>';
+            $html .= '</div>';
+            
+            // In Progress
+            $inProgress = array_filter($data['issues'], fn($i) => stripos($i['status'], 'progress') !== false);
+            if (!empty($inProgress)) {
+                $html .= '<h4>🔄 In Progress (' . count($inProgress) . ')</h4>';
+                foreach (array_slice($inProgress, 0, 5) as $issue) {
+                    $assignee = $issue['assignee']['name'] ?? 'Unassigned';
+                    $html .= '<div class="issue"><strong>' . $issue['id'] . '</strong>: ' . $issue['title'] . ' <em>(' . $assignee . ')</em></div>';
+                }
+            }
+            
+            // Blocked
+            $blocked = array_filter($data['issues'], fn($i) => stripos($i['status'], 'block') !== false);
+            if (!empty($blocked)) {
+                $html .= '<h4>🚫 Blocked (' . count($blocked) . ')</h4>';
+                foreach ($blocked as $issue) {
+                    $assignee = $issue['assignee']['name'] ?? 'Unassigned';
+                    $html .= '<div class="issue" style="border-left-color: #dc2626;"><strong>' . $issue['id'] . '</strong>: ' . $issue['title'] . ' <em>(' . $assignee . ')</em></div>';
+                }
+            }
+            
+            $html .= '</div>';
+            break;
+            
+        case 'health':
+            $healthScore = 100;
+            $healthScore -= ($data['metrics']['byStatus']['blocked'] ?? 0) * 15;
+            $healthScore -= (100 - ($data['metrics']['completionRate'] ?? 0)) * 0.3;
+            $healthScore = max(0, min(100, round($healthScore)));
+            $healthStatus = $healthScore >= 70 ? 'Healthy 💚' : ($healthScore >= 50 ? 'At Risk 🟡' : 'Critical 🔴');
+            
+            $html .= '<div class="header"><h2>📊 Sprint Health Report</h2><p>' . ($data['sprint']['name'] ?? 'Current Sprint') . '</p></div>';
+            $html .= '<div class="content">';
+            $html .= '<div style="text-align: center; margin: 20px 0;"><div class="metric"><div class="metric-value">' . $healthScore . '</div><div class="metric-label">' . $healthStatus . '</div></div></div>';
+            $html .= '<h4>Summary</h4><ul>';
+            $html .= '<li>Completion: ' . round($data['metrics']['completionRate'] ?? 0) . '%</li>';
+            $html .= '<li>Total Issues: ' . ($data['metrics']['issueCount'] ?? 0) . '</li>';
+            $html .= '<li>Done: ' . ($data['metrics']['byStatus']['done'] ?? 0) . '</li>';
+            $html .= '<li>In Progress: ' . ($data['metrics']['byStatus']['inProgress'] ?? 0) . '</li>';
+            $html .= '<li>Blocked: ' . ($data['metrics']['byStatus']['blocked'] ?? 0) . '</li>';
+            $html .= '<li>Days Remaining: ' . ($data['sprint']['daysRemaining'] ?? 0) . '</li>';
+            $html .= '</ul></div>';
+            break;
+            
+        case 'custom':
+            $html .= '<div class="header"><h2>🤖 Message from Scrum Master Agent</h2></div>';
+            $html .= '<div class="content">' . nl2br(htmlspecialchars($data['message'])) . '</div>';
+            break;
+    }
+    
+    $html .= '<div class="footer">Sent by Scrum Master Agent • <a href="https://scrum-master.intra-tech.co">View Dashboard</a></div>';
+    $html .= '</div></body></html>';
+    
+    return $html;
+}
+
+/**
  * Chat with Claude - conversational Scrum Master
  */
 function chatWithClaude($message, $sprintData, $personality, $chatHistory = []) {
@@ -75,7 +265,6 @@ function chatWithClaude($message, $sprintData, $personality, $chatHistory = []) 
         return ['error' => 'Claude API key not configured'];
     }
     
-    // Personality prompts
     $personalities = [
         'strict' => "You are a strict, by-the-book scrum master. Be direct, flag all risks and deviations, reference ticket IDs. Push back on scope creep.",
         'coach' => "You are a supportive agile coach. Celebrate wins, focus on team wellbeing, be encouraging but honest. Reference team members by name.",
@@ -84,7 +273,9 @@ function chatWithClaude($message, $sprintData, $personality, $chatHistory = []) 
     
     $systemPrompt = $personalities[$personality] ?? $personalities['coach'];
     
-    // Build system message with sprint context
+    // Check if user wants to send an email
+    $emailIntent = preg_match('/(send|email|notify|message|remind|alert).*(team|standup|update|report|health|summary)/i', $message);
+    
     $systemMessage = $systemPrompt . "\n\n";
     $systemMessage .= "You have access to the current sprint data. Here's the context:\n\n";
     $systemMessage .= "SPRINT: " . ($sprintData['sprint']['name'] ?? 'Current Sprint') . "\n";
@@ -96,7 +287,6 @@ function chatWithClaude($message, $sprintData, $personality, $chatHistory = []) 
     $systemMessage .= "Blocked: " . ($sprintData['metrics']['byStatus']['blocked'] ?? 0) . " issues\n";
     $systemMessage .= "To Do: " . ($sprintData['metrics']['byStatus']['todo'] ?? 0) . " issues\n\n";
     
-    // Add team info
     if (!empty($sprintData['team'])) {
         $systemMessage .= "TEAM MEMBERS:\n";
         foreach ($sprintData['team'] as $member) {
@@ -106,36 +296,29 @@ function chatWithClaude($message, $sprintData, $personality, $chatHistory = []) 
             $memberDone = array_filter($memberIssues, function($i) {
                 return stripos($i['status'], 'done') !== false;
             });
-            $systemMessage .= "- " . $member['name'] . ": " . count($memberIssues) . " issues assigned, " . count($memberDone) . " done\n";
+            $systemMessage .= "- " . $member['name'] . " (" . ($member['email'] ?? 'no email') . "): " . count($memberIssues) . " issues, " . count($memberDone) . " done\n";
         }
         $systemMessage .= "\n";
     }
     
-    // Add issue details
     $systemMessage .= "ISSUES:\n";
     foreach ($sprintData['issues'] as $issue) {
         $assignee = $issue['assignee']['name'] ?? 'Unassigned';
         $systemMessage .= "- [{$issue['id']}] {$issue['title']} | Status: {$issue['status']} | Assignee: {$assignee} | Points: " . ($issue['points'] ?? 0) . "\n";
     }
     
-    $systemMessage .= "\nRespond conversationally and helpfully. Keep responses concise but informative. If asked about team performance, be constructive and supportive. Reference specific ticket IDs when relevant.";
+    $systemMessage .= "\nYou can help send emails. If the user asks to send a message, email, or notification, respond with a JSON object like this:\n";
+    $systemMessage .= '{"action":"send_email","emailType":"standup|health|custom","recipients":"all|email@example.com","customMessage":"optional message for custom type"}' . "\n";
+    $systemMessage .= "Otherwise, respond conversationally and helpfully. Keep responses concise but informative.";
     
-    // Build messages array
     $messages = [];
-    
-    // Add chat history
     foreach ($chatHistory as $historyMsg) {
         $messages[] = [
             'role' => $historyMsg['role'],
             'content' => $historyMsg['content']
         ];
     }
-    
-    // Add current message
-    $messages[] = [
-        'role' => 'user',
-        'content' => $message
-    ];
+    $messages[] = ['role' => 'user', 'content' => $message];
     
     $payload = [
         'model' => 'claude-sonnet-4-20250514',
@@ -166,11 +349,22 @@ function chatWithClaude($message, $sprintData, $personality, $chatHistory = []) 
     $data = json_decode($response, true);
     $text = $data['content'][0]['text'] ?? 'Sorry, I could not process that request.';
     
+    // Check if response contains email action
+    if (preg_match('/\{[^}]*"action"\s*:\s*"send_email"[^}]*\}/s', $text, $matches)) {
+        $actionData = json_decode($matches[0], true);
+        if ($actionData && isset($actionData['action']) && $actionData['action'] === 'send_email') {
+            return [
+                'message' => $text,
+                'emailAction' => $actionData
+            ];
+        }
+    }
+    
     return ['message' => $text];
 }
 
 /**
- * Legacy analyze function for dashboard analysis
+ * Legacy analyze function
  */
 function claudeRequest($prompt, $sprintData) {
     if (!defined('CLAUDE_API_KEY') || empty(CLAUDE_API_KEY)) {
@@ -213,9 +407,10 @@ try {
             echo json_encode([
                 'status' => 'ok',
                 'timestamp' => date('c'),
-                'version' => '2.0',
+                'version' => '2.1',
                 'jiraConfigured' => defined('JIRA_EMAIL') && !empty(JIRA_EMAIL),
-                'claudeConfigured' => defined('CLAUDE_API_KEY') && !empty(CLAUDE_API_KEY)
+                'claudeConfigured' => defined('CLAUDE_API_KEY') && !empty(CLAUDE_API_KEY),
+                'emailConfigured' => defined('SMTP_EMAIL') && !empty(SMTP_EMAIL)
             ]);
             break;
             
@@ -223,7 +418,8 @@ try {
             echo json_encode([
                 'jiraHost' => JIRA_HOST,
                 'projectKey' => JIRA_PROJECT_KEY,
-                'aiEnabled' => defined('CLAUDE_API_KEY') && !empty(CLAUDE_API_KEY)
+                'aiEnabled' => defined('CLAUDE_API_KEY') && !empty(CLAUDE_API_KEY),
+                'emailEnabled' => defined('SMTP_EMAIL') && !empty(SMTP_EMAIL)
             ]);
             break;
             
@@ -347,6 +543,41 @@ try {
             
             $result = chatWithClaude($message, $sprintData, $personality, $chatHistory);
             echo json_encode($result);
+            break;
+            
+        case 'send-email':
+            $input = json_decode(file_get_contents('php://input'), true);
+            $emailType = $input['emailType'] ?? 'standup';
+            $recipients = $input['recipients'] ?? [];
+            $sprintData = $input['sprintData'] ?? [];
+            $customMessage = $input['customMessage'] ?? '';
+            
+            if (empty($recipients)) {
+                echo json_encode(['error' => 'No recipients specified']);
+                break;
+            }
+            
+            $subjects = [
+                'standup' => '📅 Daily Standup Summary - ' . date('M j, Y'),
+                'health' => '📊 Sprint Health Report - ' . ($sprintData['sprint']['name'] ?? 'Current Sprint'),
+                'custom' => '🤖 Message from Scrum Master Agent'
+            ];
+            
+            $subject = $subjects[$emailType] ?? $subjects['custom'];
+            
+            if ($emailType === 'custom') {
+                $htmlBody = generateEmailTemplate('custom', ['message' => $customMessage]);
+            } else {
+                $htmlBody = generateEmailTemplate($emailType, $sprintData);
+            }
+            
+            $results = [];
+            foreach ($recipients as $recipient) {
+                $result = sendEmail($recipient, $subject, $htmlBody);
+                $results[] = ['email' => $recipient, 'result' => $result];
+            }
+            
+            echo json_encode(['results' => $results]);
             break;
             
         case 'analyze':
