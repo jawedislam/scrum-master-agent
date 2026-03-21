@@ -68,93 +68,66 @@ function searchIssues($jql, $fields = [], $maxResults = 100) {
 }
 
 /**
- * Send email via Gmail SMTP
+ * Send email via Gmail SMTP (SSL on port 465)
  */
 function sendEmail($to, $subject, $htmlBody, $textBody = '') {
     if (!defined('SMTP_EMAIL') || !defined('SMTP_PASSWORD')) {
         return ['error' => 'Email not configured. Add SMTP_EMAIL and SMTP_PASSWORD to config.php'];
     }
     
-    $smtpServer = 'smtp.gmail.com';
-    $smtpPort = 587;
     $from = SMTP_EMAIL;
-    $fromName = 'Scrum Master Agent';
+    $password = str_replace(' ', '', SMTP_PASSWORD); // Remove any spaces
     
-    // Create boundary for multipart email
-    $boundary = md5(time());
-    
-    // Build headers
-    $headers = [
-        'MIME-Version: 1.0',
-        'From: ' . $fromName . ' <' . $from . '>',
-        'Reply-To: ' . $from,
-        'Content-Type: multipart/alternative; boundary="' . $boundary . '"',
-        'X-Mailer: Scrum-Master-Agent/2.1'
-    ];
-    
-    // Build message body
-    $message = "--$boundary\r\n";
-    $message .= "Content-Type: text/plain; charset=UTF-8\r\n\r\n";
-    $message .= ($textBody ?: strip_tags($htmlBody)) . "\r\n\r\n";
-    $message .= "--$boundary\r\n";
-    $message .= "Content-Type: text/html; charset=UTF-8\r\n\r\n";
-    $message .= $htmlBody . "\r\n\r\n";
-    $message .= "--$boundary--";
-    
-    // Connect to SMTP server
-    $socket = @fsockopen('tls://' . $smtpServer, 465, $errno, $errstr, 30);
+    // Connect to SMTP server via SSL
+    $socket = @fsockopen('ssl://smtp.gmail.com', 465, $errno, $errstr, 10);
     
     if (!$socket) {
-        // Try alternate port
-        $socket = @fsockopen($smtpServer, $smtpPort, $errno, $errstr, 30);
-        if (!$socket) {
-            return ['error' => "Could not connect to SMTP server: $errstr"];
-        }
-        // Read greeting
-        fgets($socket, 512);
-        // Send EHLO
-        fputs($socket, "EHLO localhost\r\n");
-        fgets($socket, 512);
-        // Start TLS
-        fputs($socket, "STARTTLS\r\n");
-        fgets($socket, 512);
-        stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
-        // EHLO again after TLS
-        fputs($socket, "EHLO localhost\r\n");
-        fgets($socket, 512);
-    } else {
-        // Read greeting
-        fgets($socket, 512);
-        // Send EHLO
-        fputs($socket, "EHLO localhost\r\n");
-        fgets($socket, 512);
+        return ['error' => "Could not connect to SMTP server: $errstr"];
+    }
+    
+    fgets($socket, 512); // greeting
+    
+    fputs($socket, "EHLO localhost\r\n");
+    while ($line = fgets($socket, 512)) {
+        if (strpos($line, '250 ') === 0) break;
     }
     
     // Authenticate
     fputs($socket, "AUTH LOGIN\r\n");
     fgets($socket, 512);
+    
     fputs($socket, base64_encode(SMTP_EMAIL) . "\r\n");
     fgets($socket, 512);
-    fputs($socket, base64_encode(SMTP_PASSWORD) . "\r\n");
+    
+    fputs($socket, base64_encode($password) . "\r\n");
     $authResponse = fgets($socket, 512);
     
     if (strpos($authResponse, '235') === false) {
         fclose($socket);
-        return ['error' => 'SMTP authentication failed. Check your email and app password.'];
+        return ['error' => 'SMTP authentication failed'];
     }
     
     // Send email
     fputs($socket, "MAIL FROM:<$from>\r\n");
     fgets($socket, 512);
+    
     fputs($socket, "RCPT TO:<$to>\r\n");
     fgets($socket, 512);
+    
     fputs($socket, "DATA\r\n");
     fgets($socket, 512);
     
-    // Send headers and body
-    fputs($socket, "Subject: $subject\r\n");
-    fputs($socket, implode("\r\n", $headers) . "\r\n");
-    fputs($socket, "\r\n" . $message . "\r\n.\r\n");
+    // Build message
+    $message = "Subject: $subject\r\n";
+    $message .= "From: Scrum Master Agent <$from>\r\n";
+    $message .= "To: $to\r\n";
+    $message .= "MIME-Version: 1.0\r\n";
+    $message .= "Content-Type: text/html; charset=UTF-8\r\n";
+    $message .= "\r\n";
+    $message .= $htmlBody;
+    $message .= "\r\n.\r\n";
+    
+    fputs($socket, $message);
     $dataResponse = fgets($socket, 512);
     
     fputs($socket, "QUIT\r\n");
